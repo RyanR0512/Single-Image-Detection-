@@ -4,6 +4,8 @@ import numpy as np
 import zipfile
 import os
 import gdown
+from PIL import Image
+from io import BytesIO
 
 model_path = "yolov5m-fp16.tflite"
 
@@ -35,6 +37,8 @@ def run_detection(img_path, model_path=r"C:\Users\rivar\PycharmProjects\sinlgeIt
     detections_list = []
     height, width, _ = img_resized.shape
 
+    cropped_images = []
+
     zip_filename = "cropped_detections.zip"
     with zipfile.ZipFile(zip_filename, 'w') as zip_buffer:
         for i, det in enumerate(detections):
@@ -58,13 +62,22 @@ def run_detection(img_path, model_path=r"C:\Users\rivar\PycharmProjects\sinlgeIt
                 cv2.rectangle(img_resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(img_resized, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
+                # Crop the image
                 cropped = img_resized[max(0, y1):min(y2, height), max(0, x1):min(x2, width)]
+
+                # Save cropped image bytes for zip
                 is_success, buffer = cv2.imencode(".jpg", cropped)
                 img_bytes = buffer.tobytes()
 
-                zip_name = f"crop_{i}_class{class_id}_{int(score*100)}.jpg"
+                # Save for zip file
+                zip_name = f"crop_{i}_class{class_id}_{int(score * 100)}.jpg"
                 zip_buffer.writestr(zip_name, img_bytes)
 
+                # Append cropped image as PIL Image for display
+                pil_img = Image.open(BytesIO(img_bytes))
+                cropped_images.append(pil_img)
+
+                # Append detection dict as before
                 detections_list.append({
                     "bbox": [x1, y1, x2, y2],
                     "class_id": class_id,
@@ -95,4 +108,4 @@ def run_detection(img_path, model_path=r"C:\Users\rivar\PycharmProjects\sinlgeIt
 
     output_path = "annotated_output.jpg"
     cv2.imwrite(output_path, img_resized)
-    return detections_list, output_path, ai_results
+    return detections_list, output_path, ai_results, cropped_images
