@@ -17,7 +17,7 @@ if uploaded_file is not None:
             f.write(uploaded_file.read())
 
         # Run detection - now also gets cropped images
-        detections, output_img_path, ai_results, cropped_images = boundingboxes.run_detection(temp_path)
+        detections, output_img_path, ai_results, cropped_images = boundingboxes.run_detection(temp_path, model_path)
 
         # Display output image
         output_img = Image.open(output_img_path)
