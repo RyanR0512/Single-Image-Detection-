@@ -1,5 +1,6 @@
 import streamlit as st
 from PIL import Image
+import gdown
 import boundingboxes
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
@@ -15,6 +16,13 @@ if uploaded_file is not None:
         temp_path = "temp_uploaded_image.jpg"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.read())
+
+        model_path = "yolov5m-fp16.tflite"
+
+        if not os.path.exists(model_path):
+            file_id = "1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_"
+            url = f"https://drive.google.com/file/d/1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_/view?usp=sharing"
+            gdown.download(url, model_path, quiet=False)
 
         # Run detection - now also gets cropped images
         detections, output_img_path, ai_results, cropped_images = boundingboxes.run_detection(temp_path, model_path)
