@@ -1,6 +1,7 @@
 import streamlit as st
 from PIL import Image
 import gdown
+import os
 import boundingboxes
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
