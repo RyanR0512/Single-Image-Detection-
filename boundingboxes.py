@@ -11,8 +11,8 @@ model_path = "yolov5m-fp16.tflite"
 
 if not os.path.exists(model_path):
     file_id = "1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_"
-    url = f"https://drive.google.com/file/d/1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_/view?usp=sharing"
-    gdown.download(url, model_path, quiet=False)
+    url = f"https://drive.google.com/uc?id=1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_"
+    gdown.download(url, "yolov5m-fp16.tflite", quiet=False)
 
 def run_detection(img_path, model_path):
     img = cv2.imread(img_path)
