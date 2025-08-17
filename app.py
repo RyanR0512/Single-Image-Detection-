@@ -22,7 +22,7 @@ if uploaded_file is not None:
 
         if not os.path.exists(model_path):
             file_id = "1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_"
-            url = f"https://drive.google.com/file/d/1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_/view?usp=sharing"
+            url = f"https://drive.google.com/uc?id=1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_" 
             gdown.download(url, model_path, quiet=False)
 
         # Run detection - now also gets cropped images
