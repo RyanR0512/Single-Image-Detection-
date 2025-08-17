@@ -30,7 +30,7 @@ if uploaded_file is not None:
 
         # Display output image
         output_img = Image.open(output_img_path)
-        st.image(output_img, caption="Processed Image with Bounding Boxes", use_container_width=True)
+        st.image(output_img, caption="Processed Image with Bounding Boxes")
 
         # Display detection results and crops
         st.subheader("Detection Results and Crops")
@@ -47,7 +47,7 @@ if uploaded_file is not None:
                 """
             )
             # Show the cropped image
-            st.image(cropped_images[i], caption=f"Crop {i}", use_container_width=False)
+            st.image(cropped_images[i], caption=f"Crop {i}")
 
     except Exception as e:
         st.error(f"⚠️ Error: {str(e)}")
