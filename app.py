@@ -1,6 +1,7 @@
 import streamlit as st
 from PIL import Image
-import boundingboxes  # your updated module with safer model validation
+import boundingboxes
+import os
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
 st.title("Single Image AI Detection")
@@ -12,12 +13,8 @@ st.markdown("Upload an image to detect whether it's AI-generated or human-create
 model_url = "https://singleimageitemdetector.s3.us-east-2.amazonaws.com/yolov5m-fp16.tflite"
 model_path = "yolov5m-fp16.tflite"
 
-# Optional SHA256 checksum (replace with known hash if available)
-expected_sha256 = None
-# Example: expected_sha256 = "7c3c59e9b6c7d71f82462f066f2dbe3e4f87a9e2f05c0a6539a43b1dcb8c7e3d"
-
-# Download & validate model
-boundingboxes.download_model_url(model_url, model_path, expected_sha256=expected_sha256)
+# Download model (with checksum validation handled inside boundingboxes)
+boundingboxes.download_model_url(model_url, model_path)
 
 # ----------------------
 # File Upload
@@ -36,11 +33,7 @@ if uploaded_file is not None:
         )
 
         # Show annotated image
-        st.image(
-            Image.open(output_img_path),
-            caption="Processed Image with Bounding Boxes",
-            use_container_width=True,
-        )
+        st.image(Image.open(output_img_path), caption="Processed Image with Bounding Boxes", width=700)
 
         # Show crops and AI results
         st.subheader("Detection Results")
@@ -53,7 +46,18 @@ if uploaded_file is not None:
                 f"- Label: **{label}**  \n"
                 f"- AI Score: `{det['ai_score']:.2f}`"
             )
-            st.image(cropped_images[i], caption=f"Crop {i}", use_container_width=False)
+            st.image(cropped_images[i], caption=f"Crop {i}", width=300)
+
+        # Optional: let user download all crops as a zip
+        zip_path = "cropped_detections.zip"
+        if os.path.exists(zip_path):
+            with open(zip_path, "rb") as zip_file:
+                st.download_button(
+                    label="📥 Download All Cropped Detections (ZIP)",
+                    data=zip_file,
+                    file_name="cropped_detections.zip",
+                    mime="application/zip"
+                )
 
     except Exception as e:
         st.error(f"⚠️ Error: {str(e)}")
