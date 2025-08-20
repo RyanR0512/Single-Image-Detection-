@@ -72,7 +72,14 @@ def download_model_url(url, local_path, expected_sha256=None):
 # ----------------------
 # Detection Function
 # ----------------------
-def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
+def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, debug=False):
+    import cv2
+    import numpy as np
+    import zipfile
+    from PIL import Image
+    from io import BytesIO
+    import tensorflow as tf
+
     img = cv2.imread(img_path)
     if img is None:
         raise ValueError(f"Failed to load image: {img_path}")
@@ -83,18 +90,35 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
     # Preprocess for model
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-    img_input = np.expand_dims(img_rgb.astype(np.float32) / 255.0, axis=0)
 
     # Load TFLite model
     interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
+
+    # Handle input dtype automatically
+    input_dtype = input_details[0]['dtype']
+    if input_dtype == np.uint8:
+        img_input = img_rgb.astype(np.uint8)
+        img_input = np.expand_dims(img_input, axis=0)
+    else:
+        img_input = np.expand_dims(img_rgb.astype(np.float32) / 255.0, axis=0)
+
+    # Debug info
+    if debug:
+        print("Input shape:", input_details[0]['shape'], "dtype:", input_dtype)
+        print("Output shape:", output_details[0]['shape'], "dtype:", output_details[0]['dtype'])
+
+    # Run model
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
     output = interpreter.get_tensor(output_details[0]['index'])[0]
 
-    # Scale factors for mapping 640x640 -> original image
+    if debug:
+        print("Raw model output (first 5 rows):", output[:5])
+
+    # Scale factors
     scale_x = width / 640
     scale_y = height / 640
 
@@ -118,33 +142,28 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
             classes.append(class_id)
 
     # Non-Max Suppression
-    """if boxes:
+    if boxes:
         indices = cv2.dnn.NMSBoxes(boxes, scores, conf_threshold, iou_threshold)
         indices = [i[0] if isinstance(i, (list, tuple, np.ndarray)) else i for i in indices]
         boxes = [boxes[i] for i in indices]
         scores = [scores[i] for i in indices]
-        classes = [classes[i] for i in indices]"""
+        classes = [classes[i] for i in indices]
 
     # Cropped images + zip
     detections_list, cropped_images = [], []
     zip_filename = "cropped_detections.zip"
-
-    # Annotated copy of original image
     annotated_img = img.copy()
 
     with zipfile.ZipFile(zip_filename, 'w') as zip_buffer:
         for i, (box, score, class_id) in enumerate(zip(boxes, scores, classes)):
             x1, y1, x2, y2 = box
-
-            # Clamp coordinates to image size
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(width, x2), min(height, y2)
 
-            # Skip invalid crops
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            # Draw on annotated image
+            # Draw boxes
             cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
                 annotated_img,
@@ -156,12 +175,10 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
                 2,
             )
 
-            # Crop from original image
             cropped = img[y1:y2, x1:x2]
             if cropped.size == 0:
                 continue
 
-            # Encode and save to zip
             is_success, buffer = cv2.imencode(".jpg", cropped)
             if not is_success:
                 continue
