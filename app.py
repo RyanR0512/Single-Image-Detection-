@@ -6,6 +6,27 @@ import boundingboxes
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
 
+MODEL_FILE_ID = "1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_"  # your Drive file ID
+MODEL_PATH = "yolov5m-fp16.tflite"
+
+
+@st.cache_resource
+def get_model_path():
+    """Download YOLOv5 model if missing and validate header."""
+    if not os.path.exists(MODEL_PATH):
+        url = f"https://drive.google.com/uc?id={MODEL_FILE_ID}"
+        st.info("📥 Downloading YOLOv5 model from Google Drive...")
+        gdown.download(url, MODEL_PATH, quiet=False)
+
+    # Validate header
+    with open(MODEL_PATH, "rb") as f:
+        magic = f.read(4)
+    if magic != b"TFL3":
+        raise ValueError("Downloaded file is not a valid TFLite model (TFL3 header missing).")
+
+    return MODEL_PATH
+
+
 st.title("Single Image AI Detection")
 st.markdown("Upload an image to detect whether it's AI-generated or human-created.")
 
@@ -18,25 +39,22 @@ if uploaded_file is not None:
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.read())
 
-        model_path = "yolov5m-fp16.tflite"
+        # Ensure model is ready (cached)
+        model_path = get_model_path()
 
-        if not os.path.exists(model_path):
-            file_id = "1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_"
-            url = f"https://drive.google.com/uc?id=1WgchUqXf1mrLJ8pl3l0qwgRuwcCgi2S_" 
-            gdown.download(url, "yolov5m-fp16.tflite", quiet=False)
+        # Run detection
+        detections, output_img_path, ai_results, cropped_images = boundingboxes.run_detection(
+            temp_path, model_path
+        )
 
-        # Run detection - now also gets cropped images
-        detections, output_img_path, ai_results, cropped_images = boundingboxes.run_detection(temp_path, model_path)
-
-        # Display output image
+        # Show annotated image
         output_img = Image.open(output_img_path)
-        st.image(output_img, caption="Processed Image with Bounding Boxes")
+        st.image(output_img, caption="Processed Image with Bounding Boxes", use_container_width=True)
 
-        # Display detection results and crops
+        # Show results
         st.subheader("Detection Results and Crops")
-
         for i, det in enumerate(detections):
-            label = "AI" if det["ai_like"] else "Human"
+            label = "AI" if det.get("ai_like", False) else "Human"
             st.markdown(
                 f"""
                 **Crop {i}**  
@@ -46,8 +64,7 @@ if uploaded_file is not None:
                 - AI Score: `{det['ai_score']:.2f}`
                 """
             )
-            # Show the cropped image
-            st.image(cropped_images[i], caption=f"Crop {i}")
+            st.image(cropped_images[i], caption=f"Crop {i}", use_container_width=False)
 
     except Exception as e:
         st.error(f"⚠️ Error: {str(e)}")
