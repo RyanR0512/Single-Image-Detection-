@@ -5,50 +5,21 @@ import requests
 import cv2
 import numpy as np
 from PIL import Image
-import streamlit as st
-import tensorflow as tf
-import hashlib
-
-# ----------------------
-# Model Validation Helpers
-# ----------------------
-def validate_tflite_model(path: str) -> bool:
-    """
-    Validate that a TFLite model can be loaded and tensors allocated.
-    """
-    try:
-        interpreter = tf.lite.Interpreter(model_path=path)
-        interpreter.allocate_tensors()  # fails if corrupted
-        return True
-    except Exception as e:
-        st.error(f"Model validation failed: {e}")
-        return False
-
-
-def verify_checksum(path: str, expected_sha256: str) -> bool:
-    """
-    Verify SHA256 checksum of file against expected hash.
-    """
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest() == expected_sha256
-
+import tflite_runtime.interpreter as tflite
 
 # ----------------------
 # Public URL Model Download
 # ----------------------
-def download_model_url(url, local_path, expected_sha256=None):
+def download_model_url(url, local_path):
     """
     Download TFLite model from a public URL if not already downloaded.
-    Validates with interpreter load test and optional SHA256 checksum.
     """
     if os.path.exists(local_path):
-        if validate_tflite_model(local_path):
-            return  # already valid
-        else:
-            st.warning("Existing model corrupted, redownloading...")
+        with open(local_path, "rb") as f:
+            if f.read(4) == b"TFL3":
+                return  # already valid
+            else:
+                print("Existing model invalid, redownloading...")
 
     try:
         r = requests.get(url, stream=True)
@@ -57,42 +28,27 @@ def download_model_url(url, local_path, expected_sha256=None):
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
     except Exception as e:
-        st.error(f"Failed to download model: {e}")
-        raise
+        raise RuntimeError(f"Failed to download model: {e}")
 
-    # Optional checksum check
-    if expected_sha256 and not verify_checksum(local_path, expected_sha256):
-        raise RuntimeError("Downloaded file checksum mismatch")
-
-    # Final interpreter validation
-    if not validate_tflite_model(local_path):
-        raise RuntimeError("Downloaded file is not a valid TFLite model")
+    with open(local_path, "rb") as f:
+        if f.read(4) != b"TFL3":
+            raise RuntimeError("Downloaded file is not a valid TFLite model")
 
 
 # ----------------------
 # Detection Function
 # ----------------------
 def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, debug=False):
-    import cv2
-    import numpy as np
-    import zipfile
-    from PIL import Image
-    from io import BytesIO
-    import tensorflow as tf
-
     img = cv2.imread(img_path)
     if img is None:
         raise ValueError(f"Failed to load image: {img_path}")
 
-    # Original image size
     height, width, _ = img.shape
-
-    # Preprocess for model
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
 
-    # Load TFLite model
-    interpreter = tf.lite.Interpreter(model_path=model_path)
+    # Load TFLite model (tflite-runtime)
+    interpreter = tflite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
@@ -105,12 +61,10 @@ def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, 
     else:
         img_input = np.expand_dims(img_rgb.astype(np.float32) / 255.0, axis=0)
 
-    # Debug info
     if debug:
         print("Input shape:", input_details[0]['shape'], "dtype:", input_dtype)
         print("Output shape:", output_details[0]['shape'], "dtype:", output_details[0]['dtype'])
 
-    # Run model
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
     output = interpreter.get_tensor(output_details[0]['index'])[0]
@@ -132,7 +86,6 @@ def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, 
         score = conf * class_probs[class_id]
 
         if score >= conf_threshold:
-            # Convert back to original image coordinates
             x1 = int((cx - w / 2) * scale_x)
             y1 = int((cy - h / 2) * scale_y)
             x2 = int((cx + w / 2) * scale_x)
@@ -163,7 +116,6 @@ def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, 
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            # Draw boxes
             cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
                 annotated_img,
