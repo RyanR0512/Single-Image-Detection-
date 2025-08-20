@@ -77,7 +77,10 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
     if img is None:
         raise ValueError(f"Failed to load image: {img_path}")
 
+    # Original image size
     height, width, _ = img.shape
+
+    # Preprocess for model
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
     img_input = np.expand_dims(img_rgb.astype(np.float32) / 255.0, axis=0)
@@ -91,6 +94,10 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
     interpreter.invoke()
     output = interpreter.get_tensor(output_details[0]['index'])[0]
 
+    # Scale factors for mapping 640x640 -> original image
+    scale_x = width / 640
+    scale_y = height / 640
+
     # Extract boxes
     boxes, scores, classes = [], [], []
     for det in output:
@@ -101,10 +108,11 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
         score = conf * class_probs[class_id]
 
         if score >= conf_threshold:
-            x1 = int((cx - w / 2) * width)
-            y1 = int((cy - h / 2) * height)
-            x2 = int((cx + w / 2) * width)
-            y2 = int((cy + h / 2) * height)
+            # Convert back to original image coordinates
+            x1 = int((cx - w / 2) * scale_x)
+            y1 = int((cy - h / 2) * scale_y)
+            x2 = int((cx + w / 2) * scale_x)
+            y2 = int((cy + h / 2) * scale_y)
             boxes.append([x1, y1, x2, y2])
             scores.append(score)
             classes.append(class_id)
@@ -120,22 +128,50 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
     # Cropped images + zip
     detections_list, cropped_images = [], []
     zip_filename = "cropped_detections.zip"
+
+    # Annotated copy of original image
+    annotated_img = img.copy()
+
     with zipfile.ZipFile(zip_filename, 'w') as zip_buffer:
         for i, (box, score, class_id) in enumerate(zip(boxes, scores, classes)):
             x1, y1, x2, y2 = box
-            cv2.rectangle(img_resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img_resized, f"Class {class_id}: {score:.2f}", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            cropped = img_resized[max(0, y1):min(y2, height), max(0, x1):min(x2, width)]
+            # Clamp coordinates to image size
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(width, x2), min(height, y2)
+
+            # Skip invalid crops
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            # Draw on annotated image
+            cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                annotated_img,
+                f"Class {class_id}: {score:.2f}",
+                (x1, max(0, y1 - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                2,
+            )
+
+            # Crop from original image
+            cropped = img[y1:y2, x1:x2]
+            if cropped.size == 0:
+                continue
+
+            # Encode and save to zip
             is_success, buffer = cv2.imencode(".jpg", cropped)
+            if not is_success:
+                continue
             img_bytes = buffer.tobytes()
             zip_name = f"crop_{i}_class{class_id}_{int(score*100)}.jpg"
             zip_buffer.writestr(zip_name, img_bytes)
             cropped_images.append(Image.open(BytesIO(img_bytes)))
 
             detections_list.append({
-                "bbox": box,
+                "bbox": [x1, y1, x2, y2],
                 "class_id": class_id,
                 "score": score,
                 "zip_name": zip_name
@@ -145,6 +181,8 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
     def ai_detector_from_bytes(image_bytes, threshold=100):
         image_array = np.frombuffer(image_bytes, np.uint8)
         original = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        if original is None:
+            return {"score": 0, "ai_like": False}
         _, encoded = cv2.imencode(".jpg", original, [cv2.IMWRITE_JPEG_QUALITY, 90])
         recompressed = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         ela = cv2.absdiff(original, recompressed)
@@ -163,6 +201,6 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
                 ai_results.append(result)
 
     output_path = "annotated_output.jpg"
-    cv2.imwrite(output_path, img_resized)
+    cv2.imwrite(output_path, annotated_img)
 
     return detections_list, output_path, ai_results, cropped_images
