@@ -118,12 +118,12 @@ def run_detection(img_path, model_path, conf_threshold=0.5, iou_threshold=0.4):
             classes.append(class_id)
 
     # Non-Max Suppression
-    if boxes:
+    """if boxes:
         indices = cv2.dnn.NMSBoxes(boxes, scores, conf_threshold, iou_threshold)
         indices = [i[0] if isinstance(i, (list, tuple, np.ndarray)) else i for i in indices]
         boxes = [boxes[i] for i in indices]
         scores = [scores[i] for i in indices]
-        classes = [classes[i] for i in indices]
+        classes = [classes[i] for i in indices]"""
 
     # Cropped images + zip
     detections_list, cropped_images = [], []
