@@ -2,6 +2,7 @@ import streamlit as st
 from PIL import Image
 import boundingboxes
 import os
+import zipfile
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
 st.title("Single Image AI Detection")
@@ -13,13 +14,14 @@ st.markdown("Upload an image to detect whether it's AI-generated or human-create
 model_url = "https://singleimageitemdetector.s3.us-east-2.amazonaws.com/yolov5m-fp16.tflite"
 model_path = "yolov5m-fp16.tflite"
 
-# Download model (with checksum validation handled inside boundingboxes)
+# Download model if not present
 boundingboxes.download_model_url(model_url, model_path)
 
 # ----------------------
 # File Upload
 # ----------------------
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+debug_mode = st.checkbox("Enable debug mode", value=False)
 
 if uploaded_file is not None:
     try:
@@ -29,11 +31,11 @@ if uploaded_file is not None:
 
         # Run detection
         detections, output_img_path, ai_results, cropped_images = boundingboxes.run_detection(
-            temp_path, model_path
+            temp_path, model_path, debug=debug_mode
         )
 
         # Show annotated image
-        st.image(Image.open(output_img_path), caption="Processed Image with Bounding Boxes", width=700)
+        st.image(Image.open(output_img_path), caption="Processed Image with Bounding Boxes", use_column_width=True)
 
         # Show crops and AI results
         st.subheader("Detection Results")
@@ -46,18 +48,24 @@ if uploaded_file is not None:
                 f"- Label: **{label}**  \n"
                 f"- AI Score: `{det['ai_score']:.2f}`"
             )
-            st.image(cropped_images[i], caption=f"Crop {i}", width=300)
+            st.image(cropped_images[i], caption=f"Crop {i}", use_column_width=False)
 
-        # Optional: let user download all crops as a zip
-        zip_path = "cropped_detections.zip"
-        if os.path.exists(zip_path):
-            with open(zip_path, "rb") as zip_file:
-                st.download_button(
-                    label="📥 Download All Cropped Detections (ZIP)",
-                    data=zip_file,
-                    file_name="cropped_detections.zip",
-                    mime="application/zip"
-                )
+        # Create ZIP download for cropped images
+        zip_filename = "cropped_detections.zip"
+        with zipfile.ZipFile(zip_filename, 'w') as zip_buffer:
+            for i, det in enumerate(detections):
+                crop_img = cropped_images[i]
+                buf = io.BytesIO()
+                crop_img.save(buf, format="JPEG")
+                zip_buffer.writestr(det["zip_name"], buf.getvalue())
+
+        with open(zip_filename, "rb") as f:
+            st.download_button(
+                label="Download All Cropped Detections",
+                data=f.read(),
+                file_name=zip_filename,
+                mime="application/zip"
+            )
 
     except Exception as e:
         st.error(f"⚠️ Error: {str(e)}")
