@@ -1,5 +1,6 @@
 import tensorflow as tf
 import cv2
+import requests
 import numpy as np
 import zipfile
 import os
