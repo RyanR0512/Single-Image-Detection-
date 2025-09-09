@@ -1,157 +1,112 @@
-import os
-import zipfile
-from io import BytesIO
-import requests
+import tensorflow as tf
 import cv2
 import numpy as np
-from PIL import Image
-import tflite_runtime.interpreter as tflite
+import zipfile
+import os
 
-# ----------------------
-# Public URL Model Download
-# ----------------------
-def download_model_url(url, local_path):
-    """
-    Download TFLite model from a public URL if not already downloaded.
-    """
-    if os.path.exists(local_path):
-        with open(local_path, "rb") as f:
-            if f.read(4) == b"TFL3":
-                return  # already valid
-            else:
-                print("Existing model invalid, redownloading...")
+# COCO dataset class names
+COCO_CLASSES = [
+    "person", "bicycle", "car", "motorbike", "aeroplane", "bus",
+    "train", "truck", "boat", "traffic light", "fire hydrant",
+    "stop sign", "parking meter", "bench", "bird", "cat", "dog",
+    "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat",
+    "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
+    "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+    "hot dog", "pizza", "donut", "cake", "chair", "sofa",
+    "pottedplant", "bed", "diningtable", "toilet", "tvmonitor",
+    "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator", "book",
+    "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush"
+]
 
-    try:
-        r = requests.get(url, stream=True)
-        r.raise_for_status()
-        with open(local_path, "wb") as f:
+# 🔹 Change this to your Hugging Face (or Google Drive/Dropbox) link
+MODEL_URL = "https://huggingface.co/RyanR0512/Yolov5m-tflite/resolve/main/yolov5m-fp16.tflite"
+MODEL_PATH = "yolov5m-fp16.tflite"
+
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        print("Downloading model from cloud...")
+        r = requests.get(MODEL_URL, stream=True)
+        with open(MODEL_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-    except Exception as e:
-        raise RuntimeError(f"Failed to download model: {e}")
+        print("Model downloaded:", MODEL_PATH)
 
-    with open(local_path, "rb") as f:
-        if f.read(4) != b"TFL3":
-            raise RuntimeError("Downloaded file is not a valid TFLite model")
+def run_detection(img_path, model_path=MODEL_PATH):
+    # Ensure model exists
+    download_model()
 
-
-# ----------------------
-# Detection Function
-# ----------------------
-def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, debug=False):
     img = cv2.imread(img_path)
     if img is None:
-        raise ValueError(f"Failed to load image: {img_path}")
+        raise ValueError("Failed to load image at path: " + img_path)
 
-    height, width, _ = img.shape
     img_resized = cv2.resize(img, (640, 640))
     img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+    img_input = img_rgb.astype(np.float32) / 255.0
+    img_input = np.expand_dims(img_input, axis=0)
 
-    # Load TFLite model (tflite-runtime)
-    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter = tf.lite.Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
 
-    # Handle input dtype automatically
-    input_dtype = input_details[0]['dtype']
-    if input_dtype == np.uint8:
-        img_input = img_rgb.astype(np.uint8)
-        img_input = np.expand_dims(img_input, axis=0)
-    else:
-        img_input = np.expand_dims(img_rgb.astype(np.float32) / 255.0, axis=0)
-
-    if debug:
-        print("Input shape:", input_details[0]['shape'], "dtype:", input_dtype)
-        print("Output shape:", output_details[0]['shape'], "dtype:", output_details[0]['dtype'])
-
     interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
-    output = interpreter.get_tensor(output_details[0]['index'])[0]
+    output = interpreter.get_tensor(output_details[0]['index'])
 
-    if debug:
-        print("Raw model output (first 5 rows):", output[:5])
+    detections = output[0]
+    detections_list = []
+    height, width, _ = img_resized.shape
 
-    # Scale factors
-    scale_x = width / 640
-    scale_y = height / 640
-
-    # Extract boxes
-    boxes, scores, classes = [], [], []
-    for det in output:
-        cx, cy, w, h = det[0:4]
-        conf = det[4]
-        class_probs = det[5:]
-        class_id = int(np.argmax(class_probs))
-        score = conf * class_probs[class_id]
-
-        if score >= conf_threshold:
-            x1 = int((cx - w / 2) * scale_x)
-            y1 = int((cy - h / 2) * scale_y)
-            x2 = int((cx + w / 2) * scale_x)
-            y2 = int((cy + h / 2) * scale_y)
-            boxes.append([x1, y1, x2, y2])
-            scores.append(score)
-            classes.append(class_id)
-
-    # Non-Max Suppression
-    if boxes:
-        indices = cv2.dnn.NMSBoxes(boxes, scores, conf_threshold, iou_threshold)
-        indices = [i[0] if isinstance(i, (list, tuple, np.ndarray)) else i for i in indices]
-        boxes = [boxes[i] for i in indices]
-        scores = [scores[i] for i in indices]
-        classes = [classes[i] for i in indices]
-
-    # Cropped images + zip
-    detections_list, cropped_images = [], []
     zip_filename = "cropped_detections.zip"
-    annotated_img = img.copy()
-
     with zipfile.ZipFile(zip_filename, 'w') as zip_buffer:
-        for i, (box, score, class_id) in enumerate(zip(boxes, scores, classes)):
-            x1, y1, x2, y2 = box
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(width, x2), min(height, y2)
+        for i, det in enumerate(detections):
+            cx, cy, w, h = det[0:4]
+            confidence = det[4]
+            class_probs = det[5:]
+            class_id = np.argmax(class_probs)
+            score = confidence * class_probs[class_id]
 
-            if x2 <= x1 or y2 <= y1:
-                continue
+            if score > 0.8:
+                cx *= width
+                cy *= height
+                w *= width
+                h *= height
+                x1 = int(cx - w / 2)
+                y1 = int(cy - h / 2)
+                x2 = int(cx + w / 2)
+                y2 = int(cy + h / 2)
 
-            cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                annotated_img,
-                f"Class {class_id}: {score:.2f}",
-                (x1, max(0, y1 - 10)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 255, 0),
-                2,
-            )
+                # ✅ Use class names instead of just IDs
+                class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"Class {class_id}"
+                label = f"{class_name}: {score:.2f}"
 
-            cropped = img[y1:y2, x1:x2]
-            if cropped.size == 0:
-                continue
+                cv2.rectangle(img_resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(img_resized, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            is_success, buffer = cv2.imencode(".jpg", cropped)
-            if not is_success:
-                continue
-            img_bytes = buffer.tobytes()
-            zip_name = f"crop_{i}_class{class_id}_{int(score*100)}.jpg"
-            zip_buffer.writestr(zip_name, img_bytes)
-            cropped_images.append(Image.open(BytesIO(img_bytes)))
+                cropped = img_resized[max(0, y1):min(y2, height), max(0, x1):min(x2, width)]
+                is_success, buffer = cv2.imencode(".jpg", cropped)
+                img_bytes = buffer.tobytes()
 
-            detections_list.append({
-                "bbox": [x1, y1, x2, y2],
-                "class_id": class_id,
-                "score": score,
-                "zip_name": zip_name
-            })
+                zip_name = f"crop_{i}_{class_name}_{int(score*100)}.jpg"
+                zip_buffer.writestr(zip_name, img_bytes)
 
-    # Simple ELA AI detection
+                detections_list.append({
+                    "bbox": [x1, y1, x2, y2],
+                    "class_id": class_id,
+                    "class_name": class_name,
+                    "score": score,
+                    "zip_name": zip_name
+                })
+
+    # AI detection on crops
     def ai_detector_from_bytes(image_bytes, threshold=100):
         image_array = np.frombuffer(image_bytes, np.uint8)
         original = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
-        if original is None:
-            return {"score": 0, "ai_like": False}
         _, encoded = cv2.imencode(".jpg", original, [cv2.IMWRITE_JPEG_QUALITY, 90])
         recompressed = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         ela = cv2.absdiff(original, recompressed)
@@ -170,6 +125,5 @@ def run_detection(img_path, model_path, conf_threshold=0.25, iou_threshold=0.4, 
                 ai_results.append(result)
 
     output_path = "annotated_output.jpg"
-    cv2.imwrite(output_path, annotated_img)
-
-    return detections_list, output_path, ai_results, cropped_images
+    cv2.imwrite(output_path, img_resized)
+    return detections_list, output_path, ai_results
