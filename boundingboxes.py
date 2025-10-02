@@ -1,9 +1,9 @@
 import tensorflow as tf
 import cv2
-import requests
 import numpy as np
 import zipfile
 import os
+import requests
 
 # COCO dataset class names
 COCO_CLASSES = [
@@ -24,7 +24,6 @@ COCO_CLASSES = [
     "toothbrush"
 ]
 
-# 🔹 Change this to your Hugging Face (or Google Drive/Dropbox) link
 MODEL_URL = "https://huggingface.co/RyanR0512/Yolov5m-tflite/resolve/main/yolov5m-fp16.tflite"
 MODEL_PATH = "yolov5m-fp16.tflite"
 
@@ -37,8 +36,54 @@ def download_model():
                 f.write(chunk)
         print("Model downloaded:", MODEL_PATH)
 
+# ---------------- NMS HELPERS ----------------
+def compute_iou(box1, boxes):
+    """Compute IoU between one box and many boxes."""
+    x1, y1, x2, y2 = box1
+    xx1 = np.maximum(x1, boxes[:, 0])
+    yy1 = np.maximum(y1, boxes[:, 1])
+    xx2 = np.minimum(x2, boxes[:, 2])
+    yy2 = np.minimum(y2, boxes[:, 3])
+
+    inter_w = np.maximum(0, xx2 - xx1)
+    inter_h = np.maximum(0, yy2 - yy1)
+    inter_area = inter_w * inter_h
+    box_area = (x2 - x1) * (y2 - y1)
+    boxes_area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
+    union_area = box_area + boxes_area - inter_area
+    return inter_area / (union_area + 1e-6)
+
+def non_max_suppression(detections, iou_threshold=0.5):
+    """Filter overlapping boxes using NMS per class."""
+    if not detections:
+        return []
+
+    boxes = np.array([d["bbox"] for d in detections])
+    scores = np.array([d["score"] for d in detections])
+    class_ids = np.array([d["class_id"] for d in detections])
+
+    keep = []
+    for cls in np.unique(class_ids):
+        cls_mask = class_ids == cls
+        cls_boxes = boxes[cls_mask]
+        cls_scores = scores[cls_mask]
+        cls_indices = np.argsort(-cls_scores)
+
+        while len(cls_indices) > 0:
+            best = cls_indices[0]
+            keep.append(np.where(cls_mask)[0][best])
+
+            if len(cls_indices) == 1:
+                break
+
+            ious = compute_iou(cls_boxes[best], cls_boxes[cls_indices[1:]])
+            cls_indices = cls_indices[1:][ious < iou_threshold]
+
+    return [detections[i] for i in keep]
+
+# ---------------- MAIN DETECTION ----------------
 def run_detection(img_path, model_path=MODEL_PATH):
-    # Ensure model exists
     download_model()
 
     img = cv2.imread(img_path)
@@ -63,46 +108,53 @@ def run_detection(img_path, model_path=MODEL_PATH):
     detections_list = []
     height, width, _ = img_resized.shape
 
+    # Collect raw detections
+    for i, det in enumerate(detections):
+        cx, cy, w, h = det[0:4]
+        confidence = det[4]
+        class_probs = det[5:]
+        class_id = np.argmax(class_probs)
+        score = confidence * class_probs[class_id]
+
+        if score > 0.8:
+            cx *= width
+            cy *= height
+            w *= width
+            h *= height
+            x1 = int(cx - w / 2)
+            y1 = int(cy - h / 2)
+            x2 = int(cx + w / 2)
+            y2 = int(cy + h / 2)
+
+            class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"Class {class_id}"
+            detections_list.append({
+                "bbox": [x1, y1, x2, y2],
+                "class_id": class_id,
+                "class_name": class_name,
+                "score": score,
+                "index": i
+            })
+
+    # 🔹 Apply NMS here
+    detections_list = non_max_suppression(detections_list, iou_threshold=0.5)
+
+    # Save crops into ZIP
     zip_filename = "cropped_detections.zip"
     with zipfile.ZipFile(zip_filename, 'w') as zip_buffer:
-        for i, det in enumerate(detections):
-            cx, cy, w, h = det[0:4]
-            confidence = det[4]
-            class_probs = det[5:]
-            class_id = np.argmax(class_probs)
-            score = confidence * class_probs[class_id]
+        for det in detections_list:
+            x1, y1, x2, y2 = det["bbox"]
+            label = f"{det['class_name']}: {det['score']:.2f}"
 
-            if score > 0.8:
-                cx *= width
-                cy *= height
-                w *= width
-                h *= height
-                x1 = int(cx - w / 2)
-                y1 = int(cy - h / 2)
-                x2 = int(cx + w / 2)
-                y2 = int(cy + h / 2)
+            cv2.rectangle(img_resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(img_resized, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                # ✅ Use class names instead of just IDs
-                class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"Class {class_id}"
-                label = f"{class_name}: {score:.2f}"
+            cropped = img_resized[max(0, y1):min(y2, height), max(0, x1):min(x2, width)]
+            is_success, buffer = cv2.imencode(".jpg", cropped)
+            img_bytes = buffer.tobytes()
 
-                cv2.rectangle(img_resized, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img_resized, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-                cropped = img_resized[max(0, y1):min(y2, height), max(0, x1):min(x2, width)]
-                is_success, buffer = cv2.imencode(".jpg", cropped)
-                img_bytes = buffer.tobytes()
-
-                zip_name = f"crop_{i}_{class_name}_{int(score*100)}.jpg"
-                zip_buffer.writestr(zip_name, img_bytes)
-
-                detections_list.append({
-                    "bbox": [x1, y1, x2, y2],
-                    "class_id": class_id,
-                    "class_name": class_name,
-                    "score": score,
-                    "zip_name": zip_name
-                })
+            zip_name = f"crop_{det['index']}_{det['class_name']}_{int(det['score']*100)}.jpg"
+            zip_buffer.writestr(zip_name, img_bytes)
+            det["zip_name"] = zip_name
 
     # AI detection on crops
     def ai_detector_from_bytes(image_bytes, threshold=100):
