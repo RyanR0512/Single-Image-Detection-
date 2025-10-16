@@ -1,5 +1,6 @@
 import streamlit as st
 from PIL import Image
+import io
 import boundingboxes
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
@@ -9,7 +10,6 @@ st.markdown("Upload an image to detect whether it's AI-generated or human-create
 
 uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
 
-# Optional: choose a class to focus on
 focus_class = st.selectbox(
     "Focus on a specific object (optional)",
     options=["All"] + boundingboxes.COCO_CLASSES
@@ -17,34 +17,35 @@ focus_class = st.selectbox(
 
 if uploaded_file is not None:
     try:
-        # Save uploaded image temporarily
         temp_path = "temp_uploaded_image.jpg"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.read())
 
-        # Run detection
-        detections, output_img_path, ai_results = boundingboxes.run_detection(temp_path)
+        detections, output_img_path, ai_results, crops = boundingboxes.run_detection(temp_path)
 
-        # Filter detections if a specific class is chosen
+        # Filter detections and crops together
         if focus_class != "All":
-            detections = [det for det in detections if det["class_name"] == focus_class]
+            filtered = [(det, crop) for det, crop in zip(detections, crops) if det["class_name"] == focus_class]
+        else:
+            filtered = list(zip(detections, crops))
 
-        # Display output image
+        # Display annotated image
         output_img = Image.open(output_img_path)
         st.image(output_img, caption="Processed Image with Bounding Boxes", use_container_width=True)
 
-        # Display detection results
+        # Display results with crops
         st.subheader("Detection Results")
-        if detections:
-            for i, det in enumerate(detections):
+        if filtered:
+            for i, (det, crop_bytes) in enumerate(filtered):
                 label = "AI" if det["ai_like"] else "Human"
+                crop_img = Image.open(io.BytesIO(crop_bytes))
+                st.image(crop_img, caption=f"Crop {i}: {det['class_name']}", width=200)
                 st.markdown(
                     f"""
-                    **Crop {i}**  
-                    - Class: `{det['class_name']}` (ID: {det['class_id']})  
-                    - Confidence Score: `{det['score']:.2f}`  
-                    - Label: **{label}**  
-                    - AI Score: `{det['ai_score']:.2f}`
+                    **Class:** `{det['class_name']}` (ID: {det['class_id']})  
+                    **Confidence:** `{det['score']:.2f}`  
+                    **Label:** **{label}**  
+                    **AI Score:** `{det['ai_score']:.2f}`
                     """
                 )
         else:
