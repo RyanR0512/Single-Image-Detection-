@@ -177,6 +177,15 @@ def run_detection(img_path, model_path=MODEL_PATH):
                 det["ai_like"] = result["ai_like"]
                 ai_results.append(result)
 
+    crops = []
+    for det in detections_list:
+        x1, y1, x2, y2 = det["bbox"]
+        cropped = img_resized[max(0, y1):min(y2, height), max(0, x1):min(x2, width)]
+        _, buffer = cv2.imencode(".jpg", cropped)
+        det["crop_bytes"] = buffer.tobytes()  # Add raw bytes to each detection
+        crops.append(det["crop_bytes"])
+
     output_path = "annotated_output.jpg"
     cv2.imwrite(output_path, img_resized)
-    return detections_list, output_path, ai_results
+
+    return detections_list, output_path, ai_results, crops
