@@ -64,7 +64,7 @@ def compute_iou(box1, boxes):
     union_area = box_area + boxes_area - inter_area
     return inter_area / (union_area + 1e-6)
 
-def non_max_suppression(detections, iou_threshold=0.5):
+def non_max_suppression(detections, iou_threshold=0.8):
     if not detections:
         return []
     boxes = np.array([d["bbox"] for d in detections])
