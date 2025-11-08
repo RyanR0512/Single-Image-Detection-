@@ -12,7 +12,7 @@ uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png
 
 focus_class = st.selectbox(
     "Focus on a specific object (optional)",
-    options=["All"] + boundingboxes.alphabetized_list
+    options=["All"] + boundingboxes.COCO_CLASSES
 )
 
 if uploaded_file is not None:
