@@ -114,7 +114,7 @@ def run_detection(image_path):
     h, w, _ = image.shape
     for det in output_data:
         score = det[4]
-        if score < 0.3:
+        if score < 0.7:
             continue
         class_id = int(det[5])
         x_center, y_center, box_w, box_h = det[0:4]
