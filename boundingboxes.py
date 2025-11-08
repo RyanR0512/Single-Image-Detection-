@@ -25,15 +25,7 @@ COCO_CLASSES = [
     "toothbrush"
 ]
 
-alphabetized_list = ["airplane", "apple", "backpack", "banana", "baseball bat", "baseball glove", "bear", "bicycle", "bird",
-                     "bed", "book", "bottle", "bowl", "broccoli", "bus", "car", "carrot", "cake", "cell phone", "chair",
-                     "clock", "cup", "couch", "dog", "donut", "dining table", "elephant", "fire hydrant", "fork", "frisbee",
-                     "giraffe", "hair drier", "handbag", "horse", "hot dog", "kite", "keyboard", "knife", "laptop", "microwave",
-                     "motorcycle", "mouse", "orange", "oven", "person", "pizza", "potted plant", "remote", "refrigerator",
-                     "sandwich", "scissors", "sheep", "skateboard", "skis", "snowboard", "spoon", "sports ball", "suitcase",
-                     "stop sign", "surfboard", "tennis racket", "tie", "toaster", "toilet", "toothbrush", "train",
-                     "traffic light", "truck", "tv", "umbrella", "vase", "wine glass", "zebra"]
-
+COCO_CLASSES_ALPHABETIZED = sorted(COCO_CLASSES)
 # -------------------- YOLO TFLite --------------------
 MODEL_URL = "https://huggingface.co/RyanR0512/Yolov5m-tflite/resolve/main/yolov5m-fp16.tflite"
 MODEL_PATH = "yolov5m-fp16.tflite"
