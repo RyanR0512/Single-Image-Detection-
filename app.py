@@ -1,7 +1,6 @@
 import streamlit as st
 from PIL import Image
 import io
-import os
 import boundingboxes
 
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
@@ -18,23 +17,25 @@ focus_class = st.selectbox(
 
 if uploaded_file is not None:
     try:
+        # Save uploaded file to a temporary path
         temp_path = "temp_uploaded_image.jpg"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.read())
 
+        # Run detection + per-crop AI classification
         detections, output_img_path, _, crops = boundingboxes.run_detection(temp_path)
 
+        # Filter detections and crops if a specific class is selected
         if focus_class != "All":
-            filtered = [
-                (det, crop) for det, crop in zip(detections, crops)
-                if det["class_name"] == focus_class
-            ]
+            filtered = [(det, crop) for det, crop in zip(detections, crops) if det["class_name"] == focus_class]
         else:
             filtered = list(zip(detections, crops))
 
+        # Display annotated image
         output_img = Image.open(output_img_path)
         st.image(output_img, caption="Processed Image with Bounding Boxes", use_container_width=True)
 
+        # Display results for each crop
         st.subheader("Detection Results")
         if filtered:
             for i, (det, crop_bytes) in enumerate(filtered):
@@ -46,7 +47,7 @@ if uploaded_file is not None:
                     **Class:** `{det['class_name']}` (ID: {det['class_id']})  
                     **Confidence:** `{det['score']:.2f}`  
                     **Label:** **{label}**  
-                    **AI Probability:** `{det['ai_score']:.2f}`
+                    **AI Score:** `{det['ai_score']:.2f}`
                     """
                 )
         else:
