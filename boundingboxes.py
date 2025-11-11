@@ -1,74 +1,68 @@
 import os
 import io
 import cv2
-import numpy as np
-import tensorflow as tf
-from PIL import Image
 import torch
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+import numpy as np
 import requests
+import zipfile
+from PIL import Image
+from transformers import AutoFeatureExtractor, AutoModelForImageClassification
+import tensorflow as tf
 
-# -------------------- COCO Classes --------------------
-COCO_CLASSES = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign", "dog",
-    "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra",
-    "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase",
-    "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat",
-    "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
-    "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana",
-    "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog",
-    "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
-    "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard",
-    "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator",
-    "book", "clock", "vase", "scissors", "teddy bear", "hair drier",
-    "toothbrush"
-]
 
-COCO_CLASSES_ALPHABETIZED = sorted(COCO_CLASSES)
-# -------------------- YOLO TFLite --------------------
+# ==============================
+# 1. MODEL URLS AND PATHS
+# ==============================
 MODEL_URL = "https://huggingface.co/RyanR0512/Yolov5m-tflite/resolve/main/yolov5m-fp16.tflite"
 MODEL_PATH = "yolov5m-fp16.tflite"
 
+# ==============================
+# 2. COCO CLASSES (original + alphabetized)
+# ==============================
+COCO_CLASSES = [
+    "person", "bicycle", "car", "motorbike", "aeroplane", "bus",
+    "train", "truck", "boat", "traffic light", "fire hydrant",
+    "stop sign", "parking meter", "bench", "bird", "cat", "dog",
+    "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat",
+    "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
+    "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
+    "hot dog", "pizza", "donut", "cake", "chair", "sofa",
+    "pottedplant", "bed", "diningtable", "toilet", "tvmonitor",
+    "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator", "book",
+    "clock", "vase", "scissors", "teddy bear", "hair drier",
+    "toothbrush"
+]
+COCO_CLASSES_ALPHABETIZED = sorted(COCO_CLASSES)
+
+
+# ==============================
+# 3. DOWNLOAD YOLOV5 TFLITE MODEL IF NEEDED
+# ==============================
 def download_model():
     if not os.path.exists(MODEL_PATH):
-        print("Downloading YOLOv5 TFLite model...")
+        print("📦 Downloading YOLOv5 TFLite model...")
         r = requests.get(MODEL_URL, stream=True)
         with open(MODEL_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-        print("Model downloaded:", MODEL_PATH)
+        print("✅ Model downloaded:", MODEL_PATH)
 
-# -------------------- AI/Real Classifier --------------------
-processor = AutoImageProcessor.from_pretrained("dima806/ai_vs_real_image_detection")
-classifier = AutoModelForImageClassification.from_pretrained("dima806/ai_vs_real_image_detection")
 
-def classify_crop_ai_vs_real(crop_img):
-    """Returns AI/Real label and confidence for a cropped image."""
-    image_pil = Image.fromarray(crop_img)
-    inputs = processor(image_pil, return_tensors="pt")
-    with torch.no_grad():
-        outputs = classifier(**inputs)
-        logits = outputs.logits
-        predicted_class_idx = logits.argmax(-1).item()
-        predicted_label = classifier.config.id2label[predicted_class_idx]
-        confidence = torch.nn.functional.softmax(logits, dim=-1)[0, predicted_class_idx].item()
-    return predicted_label, confidence
-
-# -------------------- Helper Functions --------------------
-def preprocess_image(image_path, target_size=(640, 640)):
-    image = cv2.imread(image_path)
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    resized = cv2.resize(image_rgb, target_size)
-    input_data = np.expand_dims(resized / 255.0, axis=0).astype(np.float32)
-    return image, input_data
-
+# ==============================
+# 4. BASIC NMS UTILITIES
+# ==============================
 def compute_iou(box1, boxes):
+    """Compute IoU between one box and an array of boxes."""
     x1, y1, x2, y2 = box1
     xx1 = np.maximum(x1, boxes[:, 0])
     yy1 = np.maximum(y1, boxes[:, 1])
     xx2 = np.minimum(x2, boxes[:, 2])
     yy2 = np.minimum(y2, boxes[:, 3])
+
     inter_w = np.maximum(0, xx2 - xx1)
     inter_h = np.maximum(0, yy2 - yy1)
     inter_area = inter_w * inter_h
@@ -77,7 +71,9 @@ def compute_iou(box1, boxes):
     union_area = box_area + boxes_area - inter_area
     return inter_area / (union_area + 1e-6)
 
+
 def non_max_suppression(detections, iou_threshold=0.5):
+    """Apply non-max suppression per class."""
     if not detections:
         return []
     boxes = np.array([d["bbox"] for d in detections])
@@ -98,70 +94,118 @@ def non_max_suppression(detections, iou_threshold=0.5):
             cls_indices = cls_indices[1:][ious < iou_threshold]
     return [detections[i] for i in keep]
 
-# -------------------- Main Detection --------------------
-def run_detection(image_path):
-    download_model()  # Ensure YOLO model exists
 
-    image, input_data = preprocess_image(image_path)
+# ==============================
+# 5. LOAD AI IMAGE DETECTOR MODEL
+# ==============================
+print("🧠 Loading AI-vs-Real classifier (umm-maybe/AI-image-detector)...")
+feature_extractor = AutoFeatureExtractor.from_pretrained("umm-maybe/AI-image-detector")
+ai_model = AutoModelForImageClassification.from_pretrained("umm-maybe/AI-image-detector")
+ai_model.eval()
+print("✅ Loaded AI detector model.")
 
+
+# ==============================
+# 6. PER-CROP AI DETECTION
+# ==============================
+def ai_detector_from_bytes(image_bytes, threshold=0.5):
+    """Classify a crop as AI-generated or human-made using umm-maybe/AI-image-detector."""
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    inputs = feature_extractor(images=image, return_tensors="pt")
+
+    with torch.no_grad():
+        outputs = ai_model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=1)[0]
+
+    class_id = torch.argmax(probs).item()
+    confidence = probs[class_id].item()
+    label = ai_model.config.id2label.get(class_id, "Unknown")
+
+    ai_like = (label.lower().startswith("ai") or confidence > threshold)
+    return {"label": label, "confidence": confidence, "ai_like": ai_like}
+
+
+# ==============================
+# 7. YOLO DETECTION + AI CLASSIFICATION
+# ==============================
+def run_detection(img_path):
+    """Run YOLO object detection and AI classification per detected crop."""
+    download_model()
+
+    # Load image
+    img = cv2.imread(img_path)
+    if img is None:
+        raise ValueError(f"❌ Failed to load image: {img_path}")
+    height, width, _ = img.shape
+
+    # Preprocess for YOLOv5
+    img_resized = cv2.resize(img, (640, 640))
+    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+    img_input = img_rgb.astype(np.float32) / 255.0
+    img_input = np.expand_dims(img_input, axis=0)
+
+    # Run inference with TensorFlow Lite
     interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
-    interpreter.set_tensor(input_details[0]['index'], input_data)
+    interpreter.set_tensor(input_details[0]['index'], img_input)
     interpreter.invoke()
-    output_data = interpreter.get_tensor(output_details[0]['index'])[0]
+    output = interpreter.get_tensor(output_details[0]['index'])
+    detections = output[0]
 
+    # Parse detections
     detections_list = []
-    h, w, _ = image.shape
-
-    # Parse YOLO outputs
-    for det in output_data:
-        score = det[4]
-        if score < 0.75:
-            continue
-        class_id = int(det[5])
-        x_center, y_center, box_w, box_h = det[0:4]
-        x1 = int((x_center - box_w / 2) * w)
-        y1 = int((y_center - box_h / 2) * h)
-        x2 = int((x_center + box_w / 2) * w)
-        y2 = int((y_center + box_h / 2) * h)
-        detections_list.append({
-            "class_id": class_id,
-            "class_name": COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else "unknown",
-            "bbox": (x1, y1, x2, y2),
-            "score": float(score)
-        })
+    for i, det in enumerate(detections):
+        cx, cy, w, h = det[:4]
+        confidence = det[4]
+        class_probs = det[5:]
+        class_id = np.argmax(class_probs)
+        score = confidence * class_probs[class_id]
+        if score > 0.6:
+            cx *= width
+            cy *= height
+            w *= width
+            h *= height
+            x1 = int(cx - w / 2)
+            y1 = int(cy - h / 2)
+            x2 = int(cx + w / 2)
+            y2 = int(cy + h / 2)
+            class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"Class {class_id}"
+            detections_list.append({
+                "bbox": [x1, y1, x2, y2],
+                "class_id": class_id,
+                "class_name": class_name,
+                "score": score
+            })
 
     # Apply NMS
-    detections_list = non_max_suppression(detections_list, iou_threshold=0.5)
+    detections_list = non_max_suppression(detections_list)
 
-    annotated_image = image.copy()
+    # Draw boxes and extract crops
     crops = []
-
-    # Run AI classifier per crop
     for det in detections_list:
         x1, y1, x2, y2 = det["bbox"]
-        crop = image[y1:y2, x1:x2]
-        if crop.size == 0:
-            continue
-        predicted_label, ai_score = classify_crop_ai_vs_real(crop)
-        det["ai_label"] = predicted_label
-        det["ai_score"] = ai_score
-        det["ai_like"] = "ai" in predicted_label.lower()
+        cropped = img_resized[max(0, y1):min(y2, 640), max(0, x1):min(x2, 640)]
+        is_success, buffer = cv2.imencode(".jpg", cropped)
+        crop_bytes = buffer.tobytes()
+        crops.append(crop_bytes)
 
-        # Draw bounding box and labels
-        color = (0, 0, 255) if det["ai_like"] else (0, 255, 0)
-        label_text = f"{det['class_name']} | {det['ai_label']} ({ai_score:.2f})"
-        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(annotated_image, label_text, (x1, max(y1 - 10, 0)),
+        # AI classification
+        ai_result = ai_detector_from_bytes(crop_bytes)
+        det["ai_label"] = ai_result["label"]
+        det["ai_score"] = ai_result["confidence"]
+        det["ai_like"] = ai_result["ai_like"]
+
+        # Draw bounding box
+        color = (0, 255, 0) if not det["ai_like"] else (0, 0, 255)
+        cv2.rectangle(img_resized, (x1, y1), (x2, y2), color, 2)
+        label_text = f"{det['class_name']} ({'AI' if det['ai_like'] else 'Human'})"
+        cv2.putText(img_resized, label_text, (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # Save crop bytes for Streamlit display
-        buf = io.BytesIO()
-        Image.fromarray(crop).save(buf, format="JPEG")
-        crops.append(buf.getvalue())
+    # Save annotated image
+    output_path = "annotated_output.jpg"
+    cv2.imwrite(output_path, img_resized)
 
-    output_path = "output_annotated.jpg"
-    cv2.imwrite(output_path, cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
-    return detections_list, output_path, True, crops
+    return detections_list, output_path, None, crops
