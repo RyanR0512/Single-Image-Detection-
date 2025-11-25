@@ -3,7 +3,7 @@ from PIL import Image
 import io
 import torch
 from transformers import AutoImageProcessor, AutoModelForImageClassification
-import boundingboxes  # your module that handles object detection + cropping
+from boundingboxes import run_detection # your module that handles object detection + cropping
 
 # Streamlit Page Setup
 st.set_page_config(page_title="Single Image AI Detection", layout="centered")
